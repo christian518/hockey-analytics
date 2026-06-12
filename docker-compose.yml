@@ -1,0 +1,119 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: hockey_analytics
+      POSTGRES_USER: ${DB_USER:-hockey}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-hockey_secret}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hockey"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin123}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-hockey}:${DB_PASSWORD:-hockey_secret}@postgres:5432/hockey_analytics
+      REDIS_URL: redis://redis:6379
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin123}
+      S3_BUCKET: hockey-clips
+      SECRET_KEY: ${SECRET_KEY:-your-secret-key}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PRICE_ID: ${STRIPE_PRICE_ID:-}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3001}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - video_storage:/tmp/video_storage
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  celery-worker:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-hockey}:${DB_PASSWORD:-hockey_secret}@postgres:5432/hockey_analytics
+      REDIS_URL: redis://redis:6379
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin123}
+      S3_BUCKET: hockey-clips
+      SECRET_KEY: ${SECRET_KEY:-your-secret-key}
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - video_storage:/tmp/video_storage
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=4
+
+  video-processor:
+    build: ./video-processor
+    environment:
+      BACKEND_URL: http://backend:8000
+      REDIS_URL: redis://redis:6379
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin123}
+      S3_BUCKET: hockey-clips
+    depends_on:
+      - redis
+      - backend
+    volumes:
+      - video_storage:/tmp/video_storage
+    command: python -m processor.main
+
+  coach-dashboard:
+    build: ./coach-dashboard
+    ports:
+      - "3000:3000"
+    environment:
+      REACT_APP_API_URL: http://localhost:8000
+      REACT_APP_WS_URL: ws://localhost:8000
+
+  parent-app:
+    build: ./parent-app
+    ports:
+      - "3001:3001"
+    environment:
+      REACT_APP_API_URL: http://localhost:8000
+      REACT_APP_STRIPE_KEY: ${STRIPE_PUBLIC_KEY:-}
+
+volumes:
+  postgres_data:
+  minio_data:
+  video_storage:
