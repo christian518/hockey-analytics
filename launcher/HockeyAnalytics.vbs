@@ -1,4 +1,3 @@
 Set objShell = CreateObject("WScript.Shell")
-strPath = Left(WScript.ScriptFullName, InStrRev(WScript.ScriptFullName, "\"))
-objShell.CurrentDirectory = strPath & "..\"
-objShell.Run "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & strPath & "launcher.ps1""", 0, False
+objShell.CurrentDirectory = "C:\hockey-analytics"
+objShell.Run "C:\hockey-analytics\launcher\launcher.bat", 1, False
